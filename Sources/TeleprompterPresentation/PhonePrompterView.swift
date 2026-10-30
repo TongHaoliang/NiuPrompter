@@ -12,6 +12,7 @@ struct PhonePrompterView: View {
     @AppStorage("teleprompter.verticalFlip") private var flip = false
     @State private var editing = false
     @State private var settings = false
+    @State private var cameraPresented = true
 
     private let background = Color(red: 0.045, green: 0.052, blue: 0.05)
     private var busy: Bool { model.isStarting || model.isPreparing }
@@ -34,7 +35,7 @@ struct PhonePrompterView: View {
                 }
             }
             .overlay(alignment: .top) {
-                if let error = model.errorMessage {
+                if let error = model.errorMessage ?? model.storageWarning {
                     Text(error).font(.callout).padding(10)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                         .padding(.horizontal, landscape ? 80 : 16)
@@ -46,6 +47,7 @@ struct PhonePrompterView: View {
         .background(background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: $editing) { editor }
+        .fullScreenCover(isPresented: $cameraPresented) { PhoneCameraView(model: model) }
         .onDisappear { Task { await model.stop() } }
 #if DEBUG && targetEnvironment(simulator)
         .task {
@@ -57,6 +59,7 @@ struct PhonePrompterView: View {
             if arguments.contains("--following") { await model.start() }
             if arguments.contains("--settings") { settings = true }
             if arguments.contains("--editor") { editing = true }
+            if arguments.contains("--camera-preview") { cameraPresented = true }
         }
 #endif
     }
@@ -89,6 +92,7 @@ struct PhonePrompterView: View {
     private var landscapeRail: some View {
         VStack(spacing: 4) {
             editButton
+            cameraButton
             Spacer(minLength: 4)
             runButton(compact: true)
             Spacer(minLength: 4)
@@ -105,6 +109,7 @@ struct PhonePrompterView: View {
     private var portraitControls: some View {
         HStack(spacing: 8) {
             editButton
+            cameraButton
             stepButton(previous: true)
             runButton(compact: false)
             stepButton(previous: false)
@@ -112,6 +117,14 @@ struct PhonePrompterView: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color.white.opacity(0.035))
+    }
+
+    private var cameraButton: some View {
+        Button {
+            Task { await model.stop(); cameraPresented = true }
+        } label: {
+            Image(systemName: "video").font(.system(size: 20)).frame(width: 44, height: 44)
+        }.buttonStyle(.plain).disabled(busy).accessibilityLabel("前置拍摄与悬浮提词")
     }
 
     private var editButton: some View {
@@ -195,6 +208,110 @@ struct PhonePrompterView: View {
     }
 
     private var editor: some View {
+        PhoneScriptLibrary(model: model, presented: $editing)
+    }
+}
+
+struct PhoneScriptLibrary: View {
+    @ObservedObject var model: ProbeViewModel
+    @Binding var presented: Bool
+    @State private var editing = false
+    @State private var renaming: ScriptDocument?
+    @State private var deleting: ScriptDocument?
+    @State private var title = ""
+    @State private var busy = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let warning = model.storageWarning {
+                    Text(warning).foregroundStyle(.yellow)
+                }
+                ForEach(model.documents) { document in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button {
+                            busy = true
+                            Task {
+                                if await model.selectDocument(document.id) { presented = false }
+                                busy = false
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(document.title).font(.headline)
+                                    Spacer()
+                                    if document.id == model.activeDocumentID {
+                                        Label("使用中", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+                                    }
+                                }
+                                let stats = ScriptStatistics(text: document.text)
+                                Text("\(stats.characterCount) 字 · 约 \(stats.durationLabel)").font(.caption).foregroundStyle(.secondary)
+                                Text(document.text.isEmpty ? "还没有内容，点击编辑添加口播稿" : document.text)
+                                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        HStack {
+                            Button("编辑", systemImage: "square.and.pencil") {
+                                busy = true
+                                Task {
+                                    if await model.selectDocument(document.id) { editing = true }
+                                    busy = false
+                                }
+                            }
+                            Spacer()
+                            Menu {
+                                Button("重命名") { title = document.title; renaming = document }
+                                Button("删除稿件", role: .destructive) { deleting = document }
+                            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 30) }
+                        }.buttonStyle(.borderless)
+                    }.padding(.vertical, 6)
+                    .swipeActions(allowsFullSwipe: false) {
+                        Button("删除", role: .destructive) { deleting = document }
+                    }
+                }
+            }
+            .disabled(busy)
+            .navigationTitle("稿件库").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("新建", systemImage: "plus") {
+                        busy = true
+                        Task {
+                            if await model.createDocument() { editing = true }
+                            busy = false
+                        }
+                    }.disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { presented = false }.disabled(busy) }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Text("点选稿件即可使用 · 每篇分别记住阅读位置")
+                    .font(.caption).foregroundStyle(.secondary).padding(10)
+            }
+            .sheet(isPresented: $editing) { PhoneScriptEditor(model: model, editing: $editing) }
+            .alert("重命名稿件", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField("稿件名称", text: $title)
+                Button("保存") {
+                    if let document = renaming { _ = model.renameDocument(document.id, title: title) }
+                    renaming = nil
+                }.disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("取消", role: .cancel) { renaming = nil }
+            }
+            .alert("删除稿件？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { document in
+                Button("删除", role: .destructive) { Task { _ = await model.deleteDocument(document.id) }; deleting = nil }
+                Button("取消", role: .cancel) { deleting = nil }
+            } message: { document in
+                Text("将删除“\(document.title)”及其阅读位置，无法撤销。录好的视频不受影响。")
+            }
+        }.preferredColorScheme(.dark).tint(.yellow)
+    }
+}
+
+struct PhoneScriptEditor: View {
+    @ObservedObject var model: ProbeViewModel
+    @Binding var editing: Bool
+    private let background = Color(red: 0.045, green: 0.052, blue: 0.05)
+    var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 10) {
                 let statistics = ScriptStatistics(text: model.scriptText)
@@ -205,6 +322,11 @@ struct PhonePrompterView: View {
                     Button("示例稿") { _ = model.setScriptText(BuiltInScript.text) }
                         .font(.subheadline)
                 }.foregroundStyle(.white.opacity(0.65))
+                if let warning = model.storageWarning {
+                    Text(warning).font(.caption).foregroundStyle(.yellow)
+                } else if model.hasSavedDraft {
+                    Text("稿件与阅读位置已自动保存在本机").font(.caption).foregroundStyle(.white.opacity(0.65))
+                }
                 TextEditor(text: Binding(get: { model.scriptText }, set: { _ = model.setScriptText($0) }))
                     .font(.system(size: 19)).lineSpacing(6)
                     .scrollContentBackground(.hidden)
@@ -219,7 +341,7 @@ struct PhonePrompterView: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
             .background(background)
-            .navigationTitle("稿件").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(model.activeDocumentTitle).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { editing = false }.fontWeight(.semibold)

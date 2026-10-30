@@ -5,6 +5,12 @@ struct TeleprompterChecks {
     @MainActor
     static func main() async {
         do {
+            try await runCaptureSpeechAudioTests()
+            print("PASS CaptureSpeechAudio")
+            try await runScriptLibraryTests()
+            print("PASS ScriptLibrary")
+            try await runReadingSessionTests()
+            print("PASS ReadingSession")
             try runScriptStatisticsTests()
             print("PASS ScriptStatistics")
             try runTextNormalizerTests()
@@ -29,6 +35,8 @@ struct TeleprompterChecks {
             print("PASS PacePrompt")
             try runAdjacentHandoffTests()
             print("PASS AdjacentHandoff")
+            try runFollowingContinuityTests()
+            print("PASS FollowingContinuity")
             try runRecoveryTests()
             print("PASS Recovery")
             try await runAudioTapIsolationTests()

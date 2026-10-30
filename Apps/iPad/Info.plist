@@ -22,8 +22,12 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>在拍摄模式中显示您的实时画面，并在您点击录制后拍摄视频。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>在您点击存入相册时，将录好的口播视频保存到系统相册。</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>在您手动开始跟随时读取口播，并在本机定位到稿件内容。</string>
+	<string>用于口播智能跟随，以及拍摄模式下录制视频声音；声音不上传。</string>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations~ipad</key>

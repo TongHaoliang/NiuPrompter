@@ -42,6 +42,13 @@ public protocol SpeechRecognitionEngine: AnyObject {
     func prepare(locale: Locale) async throws
     func start(sessionID: UUID) async throws -> AsyncThrowingStream<RecognitionEvent, Error>
     func stop() async
+    func setCaptureAudioSource(_ source: CaptureSpeechAudioSource?) throws
+}
+
+public extension SpeechRecognitionEngine {
+    func setCaptureAudioSource(_ source: CaptureSpeechAudioSource?) throws {
+        if source != nil { throw SpeechEngineError("当前识别引擎不支持拍摄跟随") }
+    }
 }
 
 public struct SpeechEngineError: LocalizedError, Sendable {

@@ -35,6 +35,7 @@ public struct ScriptMatcher {
     private var pendingTargetID: Int?
     private var pendingHitCount = 0
     private var pendingEvidence = ""
+    private var pendingAudioEnd: TimeInterval?
     private var boundaryReady = false
     private var anticipatedSegmentID: Int?
     private var paceSample: (id: Int, offset: Int, time: TimeInterval)?
@@ -58,7 +59,12 @@ public struct ScriptMatcher {
         lastEvidenceRevision = snapshot.evidenceRevision
         // Late finalization of an earlier audio interval must not rewind the reader.
         if let end = snapshot.latestAudioEnd {
-            guard end >= lastAudioEnd else { return nil }
+            guard end.isFinite, end >= lastAudioEnd else { return nil }
+            if end - lastAudioEnd > 5 {
+                resetPendingCandidate()
+                resetRhythm()
+                rereadSample = nil
+            }
             lastAudioEnd = end
         }
         let query = TextNormalizer.normalize(snapshot.recentText, recognition: true)
@@ -177,9 +183,12 @@ public struct ScriptMatcher {
                 pendingTargetID = targetID
                 pendingHitCount = 1
                 pendingEvidence = latest
-            } else if pendingEvidence != latest {
+                pendingAudioEnd = snapshot.latestAudioEnd
+            } else if pendingEvidence != latest,
+                      snapshot.latestAudioEnd == nil || pendingAudioEnd == nil || snapshot.latestAudioEnd! > pendingAudioEnd! {
                 pendingHitCount += 1
                 pendingEvidence = latest
+                pendingAudioEnd = snapshot.latestAudioEnd
             }
             guard pendingHitCount >= configuration.confirmationCount else { return nil }
         }
@@ -194,6 +203,15 @@ public struct ScriptMatcher {
         return result
     }
 
+    /// Restore only a valid anchor and its adjacent anticipatory prompt; never revive ASR evidence.
+    public mutating func restorePosition(currentSegmentID: Int?, promptSegmentID: Int?) {
+        guard let id = currentSegmentID, let index = segments.firstIndex(where: { $0.id == id }) else { return }
+        reset(to: id)
+        if index + 1 < segments.count, promptSegmentID == segments[index + 1].id {
+            anticipatedSegmentID = promptSegmentID
+        }
+    }
+
     public mutating func reset(to segmentID: Int) {
         guard !segments.isEmpty else {
             currentSegmentID = nil
@@ -206,8 +224,10 @@ public struct ScriptMatcher {
         clearEvidenceAndCandidate()
     }
 
-    public mutating func clearEvidenceAndCandidate() {
+    public mutating func clearEvidenceAndCandidate(preservingPrompt: Bool = false) {
+        let preserved = preservingPrompt ? anticipatedSegmentID : nil
         clearPace()
+        anticipatedSegmentID = preserved
         lastEvidenceRevision = 0
         lastQuery = ""
         lastLatestText = ""
@@ -294,5 +314,6 @@ public struct ScriptMatcher {
         pendingTargetID = nil
         pendingHitCount = 0
         pendingEvidence = ""
+        pendingAudioEnd = nil
     }
 }

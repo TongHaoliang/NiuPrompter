@@ -7,6 +7,7 @@ import TeleprompterSpeech
 
 public struct ProbeView: View {
     @StateObject private var viewModel: ProbeViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var isEditorPresented = false
     @State private var isDiagnosticsPresented = false
     @State private var isDisplayPresented = false
@@ -28,7 +29,12 @@ public struct ProbeView: View {
     public init(engine: any SpeechRecognitionEngine) {
         _sideMarginFraction = AppStorage(wrappedValue: Self.isPhone ? 0.10 : 0.20, "teleprompter.sideMarginFraction")
         _readingFontSize = AppStorage(wrappedValue: Self.isPhone ? 30.0 : 40.0, "teleprompter.fontSize")
-        let model = ProbeViewModel(engine: engine)
+        #if DEBUG && targetEnvironment(simulator)
+        let isPreview = ProcessInfo.processInfo.arguments.contains("--ui-preview")
+#else
+        let isPreview = false
+#endif
+        let model = ProbeViewModel(engine: engine, sessionStore: isPreview ? nil : FileReadingSessionStore.applicationStore())
 #if DEBUG && targetEnvironment(simulator)
         if ProcessInfo.processInfo.arguments.contains("--ui-preview") {
             _ = model.setScriptText(BuiltInScript.text)
@@ -38,11 +44,27 @@ public struct ProbeView: View {
     }
 
     public var body: some View {
+        Group {
 #if os(iOS)
         if Self.isPhone { PhonePrompterView(model: viewModel) }
         else { iPadBody }
 #else
         macBody
+#endif
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { Task { await viewModel.stop() } }
+#if os(iOS)
+            UIApplication.shared.isIdleTimerDisabled = phase == .active && viewModel.isListening
+#endif
+        }
+#if os(iOS)
+        .onChange(of: viewModel.isListening) { _, listening in
+            if !viewModel.usesCaptureAudio {
+                UIApplication.shared.isIdleTimerDisabled = listening && scenePhase == .active
+            }
+        }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
 #endif
     }
 
@@ -72,7 +94,7 @@ public struct ProbeView: View {
                 ProgressView(value: viewModel.engineStatus.downloadProgress)
                     .tint(.yellow).padding(.horizontal, 24)
             }
-            if let error = viewModel.errorMessage {
+            if let error = viewModel.errorMessage ?? viewModel.storageWarning {
                 Text(error).font(.callout).foregroundStyle(.orange).padding(8)
             }
             if Self.isPhone {
@@ -366,7 +388,7 @@ public struct ProbeView: View {
                     .tint(.yellow)
                     .accessibilityLabel("中文模型下载进度")
             }
-            if let error = viewModel.errorMessage ?? viewModel.engineStatus.message {
+            if let error = viewModel.errorMessage ?? viewModel.storageWarning ?? viewModel.engineStatus.message {
                 Text(error).font(.callout).foregroundStyle(.orange)
             }
         }
@@ -453,7 +475,7 @@ public struct ProbeView: View {
                         .tint(.yellow)
                         .accessibilityLabel("中文模型下载进度")
                 }
-                if let error = viewModel.errorMessage ?? viewModel.engineStatus.message {
+                if let error = viewModel.errorMessage ?? viewModel.storageWarning ?? viewModel.engineStatus.message {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -559,6 +581,11 @@ public struct ProbeView: View {
             .foregroundStyle(.white)
             Text("不含标点与空格 · 按每分钟约250字估算，实际随语速和停顿变化")
                 .font(.caption).foregroundStyle(.white.opacity(0.65))
+            if let warning = viewModel.storageWarning {
+                Text(warning).font(.caption).foregroundStyle(.yellow)
+            } else if viewModel.hasSavedDraft {
+                Text("稿件与阅读位置已自动保存在本机").font(.caption).foregroundStyle(.secondary)
+            }
             TextEditor(text: Binding(
                 get: { viewModel.scriptText },
                 set: { _ = viewModel.setScriptText($0) }

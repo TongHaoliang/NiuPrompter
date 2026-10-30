@@ -10,6 +10,7 @@ public final class AppleSpeechAnalyzerEngine: SpeechRecognitionEngine {
     public private(set) var status = EngineStatus()
     private let assetManager = SpeechAssetManager()
     private let microphone = MicrophoneAudioSource()
+    private var captureAudioSource: CaptureSpeechAudioSource?
 
     private var preparedLocale: Locale?
     private var analyzer: SpeechAnalyzer?
@@ -23,6 +24,13 @@ public final class AppleSpeechAnalyzerEngine: SpeechRecognitionEngine {
     private var analyzerStarted = false
 
     public init() {}
+
+    public func setCaptureAudioSource(_ source: CaptureSpeechAudioSource?) throws {
+        guard activeSessionID == nil, startingSessionID == nil else {
+            throw SpeechEngineError("请先暂停跟随再切换拍摄模式")
+        }
+        captureAudioSource = source
+    }
 
     public func prepare(locale: Locale) async throws {
         guard status.phase != .listening else { throw SpeechEngineError("请先停止识别，再准备模型") }
@@ -140,7 +148,11 @@ public final class AppleSpeechAnalyzerEngine: SpeechRecognitionEngine {
             try await analyzer.start(inputSequence: inputs)
             try ensureActiveSession(sessionID)
             analyzerStarted = true
-            try await microphone.start(analyzerFormat: audioFormat, inputContinuation: inputContinuation)
+            if let captureAudioSource {
+                captureAudioSource.start(format: audioFormat, continuation: inputContinuation)
+            } else {
+                try await microphone.start(analyzerFormat: audioFormat, inputContinuation: inputContinuation)
+            }
             try ensureActiveSession(sessionID)
             status.phase = .listening
             status.microphoneAuthorization = microphone.authorization
@@ -181,7 +193,8 @@ public final class AppleSpeechAnalyzerEngine: SpeechRecognitionEngine {
             return
         }
         status.phase = .stopping
-        await microphone.stop()
+        if let captureAudioSource { captureAudioSource.stop() }
+        else { await microphone.stop() }
         inputContinuation?.finish()
 
         if analyzerStarted, let analyzer {

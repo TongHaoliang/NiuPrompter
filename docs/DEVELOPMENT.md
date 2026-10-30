@@ -1,6 +1,6 @@
 # 智能提词器开发文档
 
-版本基线：2026-10-30。本文面向第一次接触项目的人，描述当前实现，不依赖作者聊天记录。要复用作者版本，以仓库源码、本文及测试为准；只想从零做近似版本，使用[独立复刻提示词](RECREATE_PROMPT.md)。
+版本基线：2026-10-31，提词拍摄与稿件库试用版。代码、测试和文档在同一提交中同步。本文不依赖作者聊天记录；复用现有版本以源码、本文及测试为准，从零做相近版本使用[独立复刻提示词](RECREATE_PROMPT.md)。
 
 ## 1. 产品目标与范围
 
@@ -8,14 +8,14 @@
 
 “智能”的核心是把识别事件、稿件定位和阅读提示协调起来。本实现使用文字和拼音相似度，不是大语言模型语义理解；不能保证任意改写、噪声、口音、极短重复句都准确，也不能消除Apple识别器自身的延迟。
 
-当前含独立iPhone界面、iPad界面和Mac调试入口。无后端、登录、第三方识别API、应用内音频上传或录音文件。系统语音资源首次准备可能需要联网。稿件仅在运行内存中，退出或重启可能丢失；字号、边距和镜像偏好持久化。暂不提供稿件库、自动保存、云同步、导入文件或成品App下载。
+当前含独立iPhone界面、iPad界面和Mac调试入口。无后端、登录、第三方识别API、应用内音频上传。普通提词不录音；iPhone 拍摄模式可由用户主动录制本机视频。系统语音资源首次准备可能需要联网。当前稿件、实际阅读位置和提前提示位置以原子写入保存到本机Application Support/SmartTeleprompter/reading-session.json；字号、边距和镜像偏好持久化。提供手机多稿库，暂不提供云同步、导入文件或成品App下载。卸载会删除应用数据。
 
 ## 2. 环境、构建与安装
 
 ### 环境
 
 - Mac及完整Xcode；项目Swift语言模式6，iOS/iPadOS和Mac调试运行下限均为26.0。
-- 本次实际构建环境为Xcode 27.1、XcodeGen 2.46.0；不是对其他工具版本的兼容性保证。
+- 当前实际构建环境为Xcode 27.2；工程使用XcodeGen生成。不是对其他工具版本的兼容性保证。
 - 真机必须支持SpeechTranscriber及所选中文模型。仅系统版本足够不代表设备必然支持；运行时检查`isAvailable`和`supportedLocale(equivalentTo:)`。[Apple SpeechTranscriber文档](https://developer.apple.com/documentation/speech/speechtranscriber)
 - 模拟器使用Fake引擎验证界面和事件流，不用它证明真实麦克风识别成功。
 
@@ -34,7 +34,7 @@ open SmartTeleprompterProbe-iPadProject.xcodeproj
 2. 在Xcode选择应用target → Signing & Capabilities，启用自动签名，选择自己的Team。
 3. 连接自己的iPhone/iPad，解锁并信任电脑；启用设置中的开发者模式，按系统要求重启确认。
 4. 在Xcode顶部选择该设备，运行。首次可能还需在“通用 → VPN与设备管理”信任/验证自己的开发者。
-5. 打开App，添加稿件，点开始；允许麦克风，等待系统中文模型准备。
+5. iPhone默认进入前置拍摄，允许相机/麦克风后从“稿件”新建或选稿，点击录像自动开启跟随。iPad默认纯提词，添加稿件后点开始。首次跟随需准备系统中文模型。
 
 不需要作者证书、账号、设备标识或已签名安装包。重新生成工程可能覆盖在Xcode里手改的设置；Bundle ID等稳定配置写回project.yml，Team由各自本机配置。
 
@@ -60,14 +60,14 @@ bash scripts/build-ipad-simulator.sh
 ```text
 麦克风 → 音频复制/转换/采样时间轴 → SpeechAnalyzer/SpeechTranscriber
        → RecognitionEvent → TranscriptAccumulator → ScriptMatcher
-       → ProbeViewModel → iPhone PhonePrompterView / iPad ProbeView
+       → ProbeViewModel → iPhone PhoneCameraView / PhonePrompterView / iPad ProbeView
 ```
 
 | 模块 | 职责 | 关键文件 |
 |---|---|---|
 | TeleprompterCore | 切句、规范化、事件累积、匹配、时长估算 | ScriptSegmenter、TranscriptAccumulator、ScriptMatcher、ScriptStatistics |
-| TeleprompterSpeech | 权限、模型、音频、Apple识别与Fake引擎 | AppleSpeechAnalyzerEngine、MicrophoneAudioSource、SpeechAssetManager |
-| TeleprompterPresentation | 会话状态、编辑、阅读、显示设置 | ProbeViewModel、PhonePrompterView、ProbeView、HighlightedScriptView |
+| TeleprompterSpeech | 权限、模型、音频、录像、Apple识别与Fake引擎 | AppleSpeechAnalyzerEngine、MicrophoneAudioSource、CaptureSpeechAudioSource、CameraRecorder、SpeechAssetManager |
+| TeleprompterPresentation | 会话、稿件库、持久化、拍摄与阅读界面 | ProbeViewModel、ReadingSessionStore、PhoneCameraView、PhonePrompterView（含稿件库和编辑器）、ProbeView |
 | Apps/iPad | 通用iOS入口及Info.plist | App.swift、Info.plist |
 | Tests/TeleprompterCoreTests | 自定义检查入口与行为用例 | main.swift及各Tests文件 |
 
@@ -78,10 +78,10 @@ bash scripts/build-ipad-simulator.sh
 - `SpeechTranscriber`使用`.volatileResults`、`.fastResults`和`.audioTimeRange`，目标locale为`zh-CN`的系统等价locale。
 - 准备时检查设备/语言支持，reserve资源，然后查询安装状态；需下载时显示进度并等待`downloadAndInstall`，最后再次验证installed。
 - 每次start创建新的transcriber、analyzer和session UUID。不得复用已经结束的Speech模块，否则再次开始可能失效。
-- iOS音频会话使用record/measurement；麦克风tap为1024帧。回调只复制Float32采样数据并投递Sendable块，不把可变AVAudioPCMBuffer跨隔离边界共享。
+- 纯提词模式的iOS音频会话使用record/measurement；麦克风tap为1024帧。回调只复制Float32采样数据并投递Sendable块，不把可变AVAudioPCMBuffer跨隔离边界共享。拍摄使用同一捕获会话分流声音，见第13节。
 - 用AVAudioConverter转换至`bestAvailableAudioFormat`。采样时间轴从零开始，按转换后帧数递增，不能给所有缓冲区同一个时间。
 - 输入/音频队列容量16，识别事件队列32；队列丢弃应报告错误，不静默假装识别正常。
-- 停止移除tap、停音频引擎、结束输入、完成识别。收尾有3秒超时路径，随后取消；处理旧任务取消及新会话启动的竞争。
+- 纯提词停止时移除tap、停音频引擎、结束输入、完成识别；拍摄暂停跟随只断开识别消费者，不能停录像或释放拍摄音频会话。识别收尾有3秒超时路径，随后取消；处理旧任务取消及新会话启动的竞争。
 - 模型下载期间系统接口并非任意可取消；不能显示“已取消”而实际仍在启动。UI仅在引擎真正进入listening后显示绿色。
 
 `RecognitionEvent`包含sessionID、递增revision、audioStart、audioEnd、text、stability。累积器拒绝旧会话、非递增revision和无效区间；final替换重叠volatile，final覆盖的音频不再接受volatile。保留有限显示文本，匹配仅用最近80个规范化字符，同时保留最新事件文字及audioEnd。
@@ -140,7 +140,17 @@ lead = max(4, min(6, 最近语速 * 0.8))  // 没有语速时仍为4
 
 ## 7. 界面规格
 
-### iPhone：横屏优先，独立布局
+### iPhone默认：提词拍摄
+
+启动呈现PhoneCameraView，全屏前置预览，文字透明叠加。左上角“稿件”进入稿件库；底部提供视频库、录像、跟随。设置内提供纯提词模式。录像开始自动开启跟随，结束后停止；单独暂停跟随不停止录像。录制中禁止编辑/切换稿件及模式。
+
+- 浮层默认24pt，可调18–36pt；文字亮度默认95%，范围55%–100%，后文为当前亮度的68%。横屏宽度最多330pt，竖屏为可用宽度88%，高度最多245pt。
+- 拖动位置按横竖屏分别保存，默认靠镜头一侧。字号和亮度属于拍摄设置，不沿用纯提词边距设置。
+- 手柄移动浮层，正文滚动回看，点句手动定位；录制中点句后恢复跟随。不能将三种手势混淆，见第14节。
+- 预览镜像、成片正常方向，无提词叠字；方向固定于开始录像时。视频保存、导出和删除见第13节。
+- 稿件库点选即回拍摄；新建/编辑打开编辑页，更多菜单重命名或删除。每篇单独恢复位置，见第14节。
+
+### iPhone次级入口：纯提词，横屏优先
 
 入口为`PhonePrompterView`，阅读组件为其内的`PhoneScriptReader`，不复用iPad工具栏。
 
@@ -148,10 +158,10 @@ lead = max(4, min(6, 最近语速 * 0.8))  // 没有语速时仍为4
 - 当前段靠上：横屏顶部留16pt，竖屏40pt；段距16pt、行距6pt、段内上下4pt。当前段白色半粗体并在左侧用3pt细线标记；后文76%白，已读40%白。无整段彩色卡片。
 - 默认30pt，可调24–48；每侧默认10%，可调5%–25%，实际边距至少22pt。设置变化及旋转后保持当前提示段的阅读锚点。
 - 右侧设置打开300pt浮层，调字号、边距时仍可看见旁边的稿件；内含镜像、上下翻转、恢复默认。
-- 稿件使用全屏编辑页；进入前先暂停识别。可输入/粘贴、载入示例；显示实时字数与预计时长。
+- 稿件入口使用共享PhoneScriptLibrary，编辑页为PhoneScriptEditor；进入前先暂停识别。可输入/粘贴、载入示例；显示实时字数与预计时长。
 - 竖屏使用正文加底部紧凑操作区，不能把横屏侧栏硬挤进去。
 
-参考图是本版本模拟器样稿截图，不是真机识别准确率证明：
+以下是纯提词模式的历史参考图，不代表手机默认拍摄首页，也不是真机识别准确率证明：
 
 ![iPhone横屏](reference/iphone-landscape.png)
 
@@ -163,7 +173,7 @@ lead = max(4, min(6, 最近语速 * 0.8))  // 没有语速时仍为4
 
 ### 状态与显示偏好
 
-绿色只表示监听已开启，黄色表示未开启/暂停，不随匹配候选或临时脱稿改变颜色。忙碌时显示准备反馈，防止重复开始。真正错误给明确文字。镜像/翻转只作用正文，不镜像操作控件；偏好保存在AppStorage。
+纯提词绿色表示监听已开启，黄色表示未开启/暂停；拍摄页跟随开启为绿色，暂停为暗色，红色用于录像控制。状态不随匹配候选或脱稿闪色。忙碌时显示准备反馈，错误给明确文字。纯提词的镜像/翻转仅作用正文；拍摄预览镜像与成片方向单独处理。偏好保存在AppStorage。
 
 ## 8. 字数与预计时长
 
@@ -171,7 +181,7 @@ lead = max(4, min(6, 最近语速 * 0.8))  // 没有语速时仍为4
 
 ## 9. 验收与维护
 
-自动检查当前基线为204项，覆盖归一化、切句、音频时间轴、会话隔离、累积器、匹配、句尾提前、防回跳、回稿、语速回退、统计与ViewModel集成。计数取自实际运行输出，不能把历史数字当作通过证据。
+自动检查当前基线为271项，覆盖归一化、切句、音频转换和时间轴、会话隔离、匹配、句尾提前、防回跳、回稿、多稿迁移/位置恢复/删除失败保护及点句后继续跟随。计数取自实际运行输出，不能把历史数字当作新修改后的通过证据。
 
 真人验收至少完成以下场景：
 
@@ -189,7 +199,7 @@ lead = max(4, min(6, 最近语速 * 0.8))  // 没有语速时仍为4
 | 拒绝麦克风、模型不可用 | 明确提示，不显示假绿色 |
 | 真机横竖屏、较大字号 | 无按钮裁切，后文可读，触控区域足够 |
 
-仅Debug模拟器支持`--ui-preview`（示例稿+Fake引擎）；可加`--landscape`、`--following`、`--settings`、`--editor`。设备版及Release不会用这些参数替换真实引擎。
+仅Debug模拟器支持`--ui-preview`（示例稿+Fake引擎）；拍摄预览加`--camera-preview`，稿件库加`--library-preview`，可请求`--landscape`。拍摄预览为黑底，不证明摄像头工作。纯提词保留`--following`、`--settings`、`--editor`调试入口，需进入对应模式。设备版及Release不会用这些参数替换真实引擎。
 
 排查“慢半拍”时，先区分识别结果到达晚、匹配门槛未通过、或界面没有跟随prompt三个环节；不要只缩短滚动动画。排查回跳时，检查是否错误清除提前提示、旧音频被接受或误把修订当新证据。更新签名后若`codesign --verify --deep --strict`报告embedded.mobileprovision改变，先清理生成缓存重新构建，避免直接归咎于用户未信任。
 
@@ -201,6 +211,71 @@ lead = max(4, min(6, 最近语速 * 0.8))  // 没有语速时仍为4
 
 GitHub用于查看源码、开发文档与后续变更。下载后先按本文检查环境，再使用自己的Apple账号构建安装；不要沿用他人的签名配置。
 
-## 11. 本轮文档复现验证
+## 11. 验证记录与未完成验收
 
 2026-10-30：从不含原生成工程、Team或构建缓存的源码副本出发，运行generate-ios-project.sh并执行通用iOS模拟器无签名构建，结果通过。原项目204项检查及源码边界检查通过；文档相对链接已检查。该结果证明本机干净目录能按文档生成和构建，不代表已在所有他人Mac或设备上验收。
+
+
+当前版本（2026-10-31）：271项检查、边界扫描和签名iOS构建通过，已安装到iPhone；模拟器检查过拍摄及稿件库布局。最新点句修复经过逻辑回归和真机构建，尚无用户确认其真机手势与录像连续性通过。发布前在独立发布副本重新运行271项检查及边界扫描，均通过；使用新的构建目录生成工程，通用iOS模拟器无签名构建成功。本次发布不将未完成的真机复测写为通过。
+
+当前安装包仍需真机复测：
+
+| 场景 | 预期 |
+|---|---|
+| 录像中暂停、恢复跟随 | 视频不断，声音正常，识别可恢复 |
+| 保存相册 | 授权后保存可回放；拒绝时原片保留。线程崩溃已修复，修复后结果待确认 |
+| 删除视频 | 仅删除本机副本，已导出与系统相册副本不变 |
+| 两篇稿件反复切换和重启 | 标题、正文和每篇实际/提示位置恢复 |
+| 从末句滚回前文点句再读 | 高亮定位，继续跟随且录像不中断 |
+| 两种横屏方向、竖屏、后台中断 | 按钮可点、成片方向正确、中断文件可回放 |
+
+## 12. 本地恢复与跟随连续性
+
+2026-10-30：回稿确认只累计音频时间确实前进的新证据；音频结果相隔超过5秒，清除待确认候选与语速估计，保留当前位置与已经提前的提示，不自动翻页。没有音频时间的合成测试保留按文本变化确认的路径。
+
+ReadingSessionStore是唯一允许直接写入稿件数据的模块（另有CameraRecorder负责用户主动录像），保存版本、稿件库（标题、正文及每篇实际/提示位置）、当前稿件ID及当前快照，不保存识别文本、音频或旧会话。编辑、手动选句、自动切句/提前提示和暂停均保存；没有状态变化不重复写。当前采用同步原子写入，避免退出前未完成的延迟保存；超长稿件的写入开销仍需实机评估。
+
+恢复后不自动开始识别或录像。手机默认拍摄页会打开相机/麦克风预览，不表示已录像或已跟随。只接受有效实际句和至多领先一段的提示句；暂停重启保留提前提示但清空识别证据。编辑相同内容不重置位置；修改内容时，当前句仍唯一存在则重新定位它，否则从开头开始，避免旧索引误指新内容。空稿也保存，模拟器UI预览不接触保存文件。
+
+保存失败显示警告并保留内存内容，后续编辑/暂停可重试；旧文件损坏或版本不支持时保留原文件并停止自动覆盖，提示用户另留原稿。应用进入后台时停止识别并保存；前台跟随时保持屏幕唤醒，暂停/离开后恢复系统行为。
+
+自动化覆盖重开恢复、插入段落后的定位、空稿、提前提示恢复、暂停重启、损坏文件和写入失败。真人停顿/插话/重读的准确率，以及来电、耳机切换等硬件中断仍须设备验收。
+
+历史验证（2026-10-30，单稿阶段）：232项检查通过；更新后的边界检查通过（仅ReadingSessionStore允许本地文件写入）；通用iOS模拟器构建、签名真机构建和codesign校验通过。iPhone/iPad模拟器用实际句1、提前提示句2的测试稿重启并截图确认正确恢复。iPhone真机已安装；iPad真机未连接，真人识别体验待用户试用。
+
+
+## 13. iPhone 前置录像与透明提词（2026-10-31）
+
+PhoneCameraView 全屏展示 AVCaptureVideoPreviewLayer，文字作为独立 SwiftUI 透明图层，不合成进录像。拍摄模式沿用既有 matcher 和阅读位置；字号、透明度和横竖屏拖动位置分别持久化。iPad 保持原提词界面。
+
+CameraRecorder 的串行队列拥有 AVCaptureSession、前置摄像头及唯一麦克风输入，同时连接 AVCaptureMovieFileOutput 和 AVCaptureAudioDataOutput（iOS 26）。音频样本复制并通过 AVAudioConverter 转成 SpeechAnalyzer 返回的最佳格式，交给 CaptureSpeechAudioSource；识别暂停只断开消费者，不释放拍摄音频会话。不能再启动另一套 AVAudioEngine 抢占麦克风。回归测试输入 Float32、目标 Int16，并核验数值、样本时间、暂停重接和溢出报错。
+
+视频存 Documents/口播视频，用户点击保存才调用相册 addOnly 授权。无网络上传。开始录像使用 RotationCoordinator 的 capture angle；预览使用 preview angle 并镜像，成片不镜像。停止/退出需等待 didFinishRecordingTo，包含开始回调尚未到达时的停止请求。后台中止并尝试完成视频，不自动续录。
+
+拍摄初版历史验证：242项检查通过，边界扫描通过；iOS 模拟器编译及横屏布局截图检查完成，签名真机构建通过，已安装到 iPhone Air；横竖屏布局均已截图检查。模拟器无法验证摄像头、真实收音、录像与跟随并行；这些仍需在手机上实际试用。验收：两种横屏、竖屏，录制10秒后回放声音与方向；录制中暂停/恢复跟随；脱稿后回稿；录像中退出/后台；拒绝权限后恢复。
+
+### 拍摄试用修正：保存与自动跟随
+
+2026-10-31 真机保存崩溃日志确认：`CameraRecorder.saveToPhotos` 的 Photos change block 继承 MainActor，Photos 在私有队列调用时触发 `_dispatch_assert_queue_fail`。将 change block 明确声明为 `@Sendable () -> Void`，仅捕获视频 URL，界面状态仍在 MainActor 更新。权限键已在实际安装包核对存在，不增加读取整个相册的权限。
+
+录像进入 recording 状态后自动开启跟随（有稿件且未退出），结束后停止跟随并取消尚未完成的识别准备。录制中仍可手动暂停跟随；没有稿件也可录像，识别失败不会中断视频。此次签名构建通过，保存操作仍需更新后在真机再次确认。
+
+### 手机入口与视频清理
+
+iPhone 默认呈现拍摄页，稿件编辑器在拍摄与纯提词模式共用。拍摄设置提供次级“纯提词模式”入口；iPad 入口不变。录制期间禁用稿件编辑和模式切换。
+
+视频列表提供行内删除与左滑删除，二次确认说明删除范围。CameraRecorder 仅允许删除自己列出的、直属口播视频目录的文件；导出中、录像中及繁忙状态禁止删除。失败保留列表并显示原因，成功刷新列表与会话内已存相册标记；不调用系统相册删除 API。
+
+## 14. 稿件库（2026-10-31）
+
+ReadingSession v2 在同一个原子 JSON 中保存 documents 和 activeDocumentID，每篇有稳定 UUID、标题、正文、实际句和提前提示句。保留顶层当前稿件快照。v1 加载后迁入“原来的稿件”，下次成功保存才升级；未知版本、损坏文件或无效活动 ID 不覆盖。最后一篇删除后创建空白稿，避免旧稿复活。
+
+ProbeViewModel 在新建、选稿或删除前停止识别并保存当前进度；整库成功写入后才提交结构变化。失败显示警告且不切走/删除原稿。编辑沿用当前句唯一文本锚点恢复策略。PhoneScriptLibrary 同时供手机拍摄与纯提词入口使用，PhoneScriptEditor 复用；稿件切换不自动启动麦克风。
+
+稿件库加入时263项回归检查通过，覆盖旧稿迁移、多稿与提前位置重启恢复、重命名、删除当前/非当前/最后稿件、空名称、写入失败阻止删除或新建。边界扫描维持所有文稿写入归 ReadingSessionStore 管理。
+
+### 拍摄页手动回稿修正
+
+悬浮稿件原本只有滚动，缺少点击选句事件，导致用户回看前文时识别锚点仍停在末句。现为每句增加整行点击区域，调用既有 selectSegment 清理旧会话、重设实际与提示位置并保存；录制中若跟随已暂停，点句后恢复跟随。点句仅重启识别消费者，不调用录像停止。拖动提词框仍由顶部手柄负责，正文滚动不等于选句。
+
+271项检查通过；新增“末句回到首句、旧 final 不覆盖手动位置、重新说话推进下一句、非录制选句不启动麦克风”回归场景。真机实际手势与录制连续性仍需用户试用。

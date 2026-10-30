@@ -109,6 +109,32 @@ func runSpeechAndViewModelTests() async throws {
     try checkEqual(engine.stopCount, 3, "repeated stop is safe")
     try checkTrue(viewModel.setScriptText("停止后可以编辑这份口播稿"), "script can be edited after stop")
 
+    // Reproduce scrolling back from the final sentence and tapping an earlier sentence.
+    let seekEngine = FakeSpeechRecognitionEngine()
+    let seekVM = ProbeViewModel(engine: seekEngine)
+    _ = seekVM.setScriptText(probeTestScript)
+    await seekVM.selectSegment(seekVM.segments.last!.id)
+    await seekVM.start()
+    let oldSeekSession = seekEngine.startSessions.last!
+    await seekVM.selectSegment(0)
+    let newSeekSession = seekEngine.startSessions.last!
+    try checkEqual(seekVM.promptSegmentID, 0, "tap back from final sentence immediately resets highlighted prompt")
+    try checkTrue(newSeekSession != oldSeekSession, "tap discards old speech session")
+    try checkTrue(seekVM.isListening, "tap while following resumes listening automatically")
+    seekEngine.send(RecognitionEvent(sessionID: oldSeekSession, revision: 100, audioStart: 0, audioEnd: 20,
+                                    text: probeTestScript, stability: .final), through: oldSeekSession)
+    seekEngine.send(RecognitionEvent(sessionID: newSeekSession, revision: 1, audioStart: 0, audioEnd: 3,
+                                    text: probeFirstSegment, stability: .volatile))
+    try await waitUntil("speech after tapping is consumed by new session") { seekVM.receivedEventCount == 1 }
+    try checkEqual(seekVM.currentSegmentID, 0, "old final result cannot pull manual position to the end")
+    try checkEqual(seekVM.promptSegmentID, 1, "speaking again advances prompt from selected sentence")
+    await seekVM.stop()
+    await seekVM.selectSegment(0)
+    try checkTrue(!seekVM.isListening, "selection outside recording does not unexpectedly open mic")
+    await seekVM.start() // Camera's tap handler resumes speech when a recording is active.
+    try checkTrue(seekVM.isListening, "paused following can resume at the tapped sentence")
+    await seekVM.stop()
+
     let failingPrepareEngine = FakeSpeechRecognitionEngine()
     failingPrepareEngine.prepareFailureMessage = "中文模型不可用"
     let failingPrepareVM = ProbeViewModel(engine: failingPrepareEngine)
