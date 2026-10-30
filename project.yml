@@ -1,0 +1,36 @@
+name: SmartTeleprompterProbe-iPadProject
+options:
+  bundleIdPrefix: local.smartteleprompter.probe
+  deploymentTarget:
+    iOS: "26.0"
+packages:
+  SmartTeleprompterProbe:
+    path: ${TELEPROMPTER_PACKAGE_ROOT}
+targets:
+  SmartTeleprompterProbe-iPad:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Apps/iPad
+        excludes:
+          - Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.smartteleprompter.probe.ipad
+        INFOPLIST_FILE: ${TELEPROMPTER_PACKAGE_ROOT}/Apps/iPad/Info.plist
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+    dependencies:
+      - package: SmartTeleprompterProbe
+        product: TeleprompterSpeech
+      - package: SmartTeleprompterProbe
+        product: TeleprompterPresentation
+schemes:
+  SmartTeleprompterProbe-iPad:
+    build:
+      targets:
+        SmartTeleprompterProbe-iPad: all
+    run:
+      config: Debug
