@@ -1,6 +1,10 @@
-# 智能提词器
+# NiuPrompter · 牛哥提词器
 
-**一个跟着你说话走的中文提词器。**
+**NiuPrompter（牛哥提词器）：一个跟着你说话走的中文提词器。**
+
+在 GitHub 搜索 **niuprompter**，或直接打开 [TongHaoliang/NiuPrompter](https://github.com/TongHaoliang/NiuPrompter)。支持 iPhone 提词拍摄、iPad 镜像提词、本地语音智能跟随；附可复制的 AI 开发提示词。
+
+A voice-following teleprompter for iPhone and iPad, with on-device speech recognition, camera recording, and a script library.
 
 口播时，最打断节奏的事之一，就是你还没说完，稿子已经滚走了；或者你已经说完，却还得等下一句。
 
